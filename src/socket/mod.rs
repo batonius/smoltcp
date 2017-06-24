@@ -17,6 +17,7 @@ use wire::IpRepr;
 mod raw;
 mod udp;
 mod tcp;
+mod dispatch;
 mod set;
 
 pub use self::raw::PacketBuffer as RawPacketBuffer;
@@ -33,6 +34,8 @@ pub use self::tcp::TcpSocket;
 
 pub use self::set::{Set as SocketSet, Item as SocketSetItem, Handle as SocketHandle};
 pub use self::set::{Iter as SocketSetIter, IterMut as SocketSetIterMut};
+
+pub use self::dispatch::{DispatchTable as SocketDispatchTable, Iter as SocketDispatchIterMut};
 
 /// A network socket.
 ///

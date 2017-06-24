@@ -123,6 +123,10 @@ pub enum Error {
     /// An incoming packet was recognized by a stateful socket and contained invalid control
     /// information that caused the socket to drop it.
     Dropped,
+    /// The endpoint a new socket is trying to bind to is already in use by another socket.
+    AlreadyInUse,
+    /// The required socked is not found.
+    SocketNotFound,
 
     #[doc(hidden)]
     __Nonexhaustive
@@ -140,6 +144,8 @@ impl fmt::Display for Error {
             &Error::Exhausted     => write!(f, "buffer space exhausted"),
             &Error::Rejected      => write!(f, "rejected by socket"),
             &Error::Dropped       => write!(f, "dropped by socket"),
+            &Error::AlreadyInUse   => write!(f, "address is already in use"),
+            &Error::SocketNotFound => write!(f, "socket not found"),
             &Error::__Nonexhaustive => unreachable!()
         }
     }
