@@ -19,6 +19,7 @@ mod udp;
 mod tcp;
 mod dispatch;
 mod set;
+mod container;
 
 pub use self::raw::PacketBuffer as RawPacketBuffer;
 pub use self::raw::SocketBuffer as RawSocketBuffer;
@@ -34,8 +35,7 @@ pub use self::tcp::TcpSocket;
 
 pub use self::set::{Set as SocketSet, Item as SocketSetItem, Handle as SocketHandle};
 pub use self::set::{Iter as SocketSetIter, IterMut as SocketSetIterMut};
-
-pub use self::dispatch::{DispatchTable as SocketDispatchTable, Iter as SocketDispatchIterMut};
+pub use self::container::{Container as SocketContainer};
 
 /// A network socket.
 ///

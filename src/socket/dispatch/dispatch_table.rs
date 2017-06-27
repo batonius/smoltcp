@@ -1,7 +1,7 @@
 use Error;
 use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_map::Entry as MapEntry;
-use socket::{SocketHandle, SocketSet, TcpSocket, UdpSocket, RawSocket, Socket};
+use socket::{SocketHandle, SocketSet, TcpSocket, UdpSocket, RawSocket, Socket, AsSocket};
 use wire::{IpVersion, IpProtocol, IpEndpoint, IpAddress, IpRepr, UdpRepr, TcpRepr};
 
 #[derive(Debug)]
@@ -213,9 +213,14 @@ impl DispatchTable {
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_version: IpVersion,
         ip_protocol: IpProtocol,
-    ) -> Iter<'d, 'b, 'c> {
+    ) -> Iter<'d, RawSocket<'b, 'c>> {
         let key = (ip_version, ip_protocol);
-        Iter::new(self.raw.get(&key).map(move |handle| set.get_mut(*handle)))
+        Iter::new(
+            self.raw
+                .get(&key)
+                .map(move |handle| (set.get_mut(*handle), handle))
+                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
+        )
     }
 
     pub fn get_udp_sockets<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
@@ -223,12 +228,13 @@ impl DispatchTable {
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_repr: &IpRepr,
         udp_repr: &UdpRepr,
-    ) -> Iter<'d, 'b, 'c> {
+    ) -> Iter<'d, UdpSocket<'b, 'c>> {
         Iter::new(
             DispatchTable::get_l3_socket(
                 &self.udp,
                 IpEndpoint::new(ip_repr.dst_addr(), udp_repr.dst_port),
-            ).map(move |handle| set.get_mut(*handle)),
+            ).map(move |handle| (set.get_mut(*handle), handle))
+                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
         )
     }
 
@@ -237,7 +243,7 @@ impl DispatchTable {
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_repr: &IpRepr,
         tcp_repr: &TcpRepr,
-    ) -> Iter<'d, 'b, 'c> {
+    ) -> Iter<'d, TcpSocket<'b>> {
         Iter::new(
             DispatchTable::get_l3_socket(
                 &self.tcp,
@@ -248,7 +254,8 @@ impl DispatchTable {
                     .get(&IpEndpoint::new(ip_repr.src_addr(), tcp_repr.src_port))
                     .or_else(|| tcp_endpoint.listen_sockets.iter().next())
             })
-                .map(move |handle| set.get_mut(*handle)),
+                .map(move |handle| (set.get_mut(*handle), handle))
+                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
         )
     }
 
@@ -271,20 +278,20 @@ impl DispatchTable {
     }
 }
 
-pub struct Iter<'a, 'b: 'a, 'c: 'a + 'b> {
-    socket: Option<&'a mut Socket<'b, 'c>>,
+pub struct Iter<'a, T: 'a> {
+    socket: Option<(&'a mut T, SocketHandle)>,
 }
 
-impl<'a, 'b: 'a, 'c: 'a + 'b> Iter<'a, 'b, 'c> {
-    pub fn new(socket: Option<&'a mut Socket<'b, 'c>>) -> Iter<'a, 'b, 'c> {
+impl<'a, T: 'a> Iter<'a, T> {
+    pub fn new(socket: Option<(&'a mut T, SocketHandle)>) -> Iter<'a, T> {
         Iter { socket }
     }
 }
 
-impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for Iter<'a, 'b, 'c> {
-    type Item = &'a mut Socket<'b, 'c>;
+impl<'a, T: 'a> Iterator for Iter<'a, T> {
+    type Item = (&'a mut T, SocketHandle);
 
-    fn next(&mut self) -> Option<&'a mut Socket<'b, 'c>> {
+    fn next(&mut self) -> Option<Self::Item> {
         self.socket.take()
     }
 }
