@@ -150,26 +150,33 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         Ok(buffer.len())
     }
 
-    pub(crate) fn process(&mut self, _timestamp: u64, ip_repr: &IpRepr,
-                          payload: &[u8]) -> Result<(), Error> {
-        match self.ip_version {
-            IpVersion::Ipv4 => {
-                if ip_repr.protocol() != self.ip_protocol {
-                    return Err(Error::Rejected);
-                }
-                let header_len = ip_repr.buffer_len();
-                let packet_buf = self.rx_buffer.enqueue().map_err(|()| Error::Exhausted)?;
-                packet_buf.size = header_len + payload.len();
-                ip_repr.emit(&mut packet_buf.as_mut()[..header_len]);
-                packet_buf.as_mut()[header_len..header_len + payload.len()]
-                    .copy_from_slice(payload);
-                net_trace!("[{}]:{}:{}: receiving {} octets",
-                           self.debug_id, self.ip_version, self.ip_protocol,
-                           packet_buf.size);
-                Ok(())
-            }
-            IpVersion::__Nonexhaustive => unreachable!()
+    pub(crate) fn would_accept(&self, ip_version: IpVersion, ip_protocol: IpProtocol) -> bool {
+        ip_version == self.ip_version && ip_protocol == self.ip_protocol
+    }
+
+    pub(crate) fn process_accepted(&mut self, _timestamp: u64, ip_repr: &IpRepr,
+                            payload: &[u8]) -> Result<(), Error> {
+        debug_assert!(self.would_accept(IpVersion::Ipv4, ip_repr.protocol()));
+        let header_len = ip_repr.buffer_len();
+        let packet_buf = self.rx_buffer.enqueue().map_err(|()| Error::Exhausted)?;
+        packet_buf.size = header_len + payload.len();
+        ip_repr.emit(&mut packet_buf.as_mut()[..header_len]);
+        packet_buf.as_mut()[header_len..header_len + payload.len()]
+            .copy_from_slice(payload);
+        net_trace!("[{}]:{}:{}: receiving {} octets",
+                   self.debug_id, self.ip_version, self.ip_protocol,
+                   packet_buf.size);
+        Ok(())
+    }
+
+    /// See [Socket::process](enum.Socket.html#method.process).
+    pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
+                   payload: &[u8]) -> Result<(), Error> {
+        if !self.would_accept(IpVersion::Ipv4, ip_repr.protocol()) {
+            return Err(Error::Rejected);
         }
+
+        self.process_accepted(timestamp, ip_repr, payload)
     }
 
     /// See [Socket::dispatch](enum.Socket.html#method.dispatch).

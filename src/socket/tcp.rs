@@ -649,24 +649,38 @@ impl<'a> TcpSocket<'a> {
     }
 
     pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
-                          payload: &[u8]) -> Result<(), Error> {
-        debug_assert!(ip_repr.protocol() == IpProtocol::Tcp);
-
-        if self.state == State::Closed { return Err(Error::Rejected) }
-
+                   payload: &[u8]) -> Result<(), Error> {
         let packet = TcpPacket::new_checked(&payload[..ip_repr.payload_len()])?;
         let repr = TcpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
 
-        // Reject packets with a wrong destination.
-        if self.local_endpoint.port != repr.dst_port { return Err(Error::Rejected) }
-        if !self.local_endpoint.addr.is_unspecified() &&
-           self.local_endpoint.addr != ip_repr.dst_addr() { return Err(Error::Rejected) }
+        if !self.would_accept(ip_repr, &repr) {
+            return Err(Error::Rejected);
+        }
 
-        // Reject packets from a source to which we aren't connected.
-        if self.remote_endpoint.port != 0 &&
-           self.remote_endpoint.port != repr.src_port { return Err(Error::Rejected) }
-        if !self.remote_endpoint.addr.is_unspecified() &&
-           self.remote_endpoint.addr != ip_repr.src_addr() { return Err(Error::Rejected) }
+        self.process_accepted(timestamp, ip_repr, &repr)
+    }
+
+    pub fn would_accept(&self, ip_repr: &IpRepr, tcp_repr: &TcpRepr) -> bool {
+        ip_repr.protocol() == IpProtocol::Tcp &&
+            self.local_endpoint.port == tcp_repr.dst_port &&
+            (self.local_endpoint.addr.is_unspecified() ||
+             self.local_endpoint.addr == ip_repr.dst_addr()) &&
+            (self.remote_endpoint.port == 0 ||
+             self.remote_endpoint.port == tcp_repr.src_port) &&
+            (self.remote_endpoint.addr.is_unspecified() ||
+             self.remote_endpoint.addr == ip_repr.src_addr()) &&
+            // TCP sockets in Listen state ignore ACK packtes
+            (self.state != State::Listen ||
+             tcp_repr.ack_number.is_none())
+    }
+
+    /// See [Socket::process](enum.Socket.html#method.process).
+    pub fn process_accepted(&mut self, timestamp: u64, ip_repr: &IpRepr,
+                            &repr: &TcpRepr) -> Result<(), Error> {
+        debug_assert!(self.would_accept(ip_repr, &repr));
+
+        // Closed TCP socket accepts packets and drops them
+        if self.state == State::Closed { return Err(Error::Rejected) }
 
         // Consider how much the sequence number space differs from the transmit buffer space.
         let (sent_syn, sent_fin) = match self.state {

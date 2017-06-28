@@ -14,7 +14,7 @@ use smoltcp::wire::{EthernetAddress, IpVersion, IpProtocol, IpAddress,
                     Ipv4Address, Ipv4Packet, Ipv4Repr,
                     Icmpv4Repr, Icmpv4Packet};
 use smoltcp::iface::{ArpCache, SliceArpCache, EthernetInterface};
-use smoltcp::socket::{AsSocket, SocketSet};
+use smoltcp::socket::{SocketContainer};
 use smoltcp::socket::{RawSocket, RawSocketBuffer, RawPacketBuffer};
 use std::collections::HashMap;
 use byteorder::{ByteOrder, NetworkEndian};
@@ -58,8 +58,8 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, [IpAddress::from(local_addr)]);
 
-    let mut sockets = SocketSet::new(vec![]);
-    let raw_handle = sockets.add(raw_socket);
+    let mut sockets = SocketContainer::new(vec![]);
+    let raw_handle = sockets.add(raw_socket).unwrap();
 
     let mut send_next = Duration::default();
     let mut seq_no = 0;
@@ -69,7 +69,7 @@ fn main() {
 
     loop {
         {
-            let socket: &mut RawSocket = sockets.get_mut(raw_handle).as_socket();
+            let mut socket = sockets.get_mut::<RawSocket>(raw_handle).unwrap();
 
             let timestamp = Instant::now().duration_since(startup_time);
             let timestamp_us = (timestamp.as_secs() * 1000000) +

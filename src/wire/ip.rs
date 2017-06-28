@@ -108,8 +108,9 @@ impl fmt::Display for Address {
 /// An endpoint can be constructed from a port, in which case the address is unspecified.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 pub struct Endpoint {
-    pub addr: Address,
-    pub port: u16
+    // WARNING: The order of the fields is important for correct Ord derivatoin!
+    pub port: u16,
+    pub addr: Address
 }
 
 impl Endpoint {
@@ -123,6 +124,11 @@ impl Endpoint {
     /// Query whether the endpoint has an unspecified address.
     pub fn is_unspecified(&self) -> bool {
         self.addr.is_unspecified()
+    }
+
+    /// Query whether the endpoint had an unspecified address and zero port
+    pub fn is_unbound(&self) -> bool {
+        self.is_unspecified() && self.port == 0
     }
 }
 

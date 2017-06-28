@@ -24,7 +24,13 @@ pub struct DispatchTable {
     raw: BTreeMap<(IpVersion, IpProtocol), SocketHandle>,
     udp: BTreeMap<IpEndpoint, SocketHandle>,
     tcp: BTreeMap<IpEndpoint, TcpLocalEndpoint>,
+
+    rev_raw: BTreeMap<SocketHandle, (IpVersion, IpProtocol)>,
+    rev_udp: BTreeMap<SocketHandle, IpEndpoint>,
+    rev_tcp: BTreeMap<SocketHandle, (IpEndpoint, IpEndpoint)>,
 }
+
+pub type WithHandle<'a, T> = Option<(&'a mut T, SocketHandle)>;
 
 impl DispatchTable {
     pub fn new() -> DispatchTable {
@@ -32,6 +38,9 @@ impl DispatchTable {
             raw: BTreeMap::new(),
             tcp: BTreeMap::new(),
             udp: BTreeMap::new(),
+            rev_raw: BTreeMap::new(),
+            rev_tcp: BTreeMap::new(),
+            rev_udp: BTreeMap::new(),
         }
     }
 
@@ -49,12 +58,20 @@ impl DispatchTable {
         udp_socket: &UdpSocket,
         handle: SocketHandle,
     ) -> Result<(), Error> {
-        if udp_socket.endpoint() != IpEndpoint::default() {
-            match self.udp.entry(udp_socket.endpoint()) {
-                MapEntry::Occupied(_) => return Err(Error::AlreadyInUse),
-                MapEntry::Vacant(e) => e.insert(handle),
-            };
+        if udp_socket.endpoint().is_unbound() {
+            return Ok(());
         }
+        match (
+            self.udp.entry(udp_socket.endpoint()),
+            self.rev_udp.entry(handle),
+        ) {
+            (MapEntry::Occupied(_), _) |
+            (_, MapEntry::Occupied(_)) => return Err(Error::AlreadyInUse),
+            (MapEntry::Vacant(e), MapEntry::Vacant(re)) => {
+                e.insert(handle);
+                re.insert(udp_socket.endpoint());
+            }
+        };
         Ok(())
     }
 
@@ -64,9 +81,13 @@ impl DispatchTable {
         handle: SocketHandle,
     ) -> Result<(), Error> {
         let key = (raw_socket.ip_version(), raw_socket.ip_protocol());
-        match self.raw.entry(key) {
-            MapEntry::Occupied(_) => return Err(Error::AlreadyInUse),
-            MapEntry::Vacant(e) => e.insert(handle),
+        match (self.raw.entry(key), self.rev_raw.entry(handle)) {
+            (MapEntry::Occupied(_), _) |
+            (_, MapEntry::Occupied(_)) => return Err(Error::AlreadyInUse),
+            (MapEntry::Vacant(e), MapEntry::Vacant(re)) => {
+                e.insert(handle);
+                re.insert(key);
+            }
         };
         Ok(())
     }
@@ -76,187 +97,163 @@ impl DispatchTable {
         tcp_socket: &TcpSocket,
         handle: SocketHandle,
     ) -> Result<(), Error> {
-        if tcp_socket.local_endpoint() == IpEndpoint::default() {
+        if tcp_socket.local_endpoint().is_unbound() {
             return Ok(());
         }
 
+        let rev_entry = match self.rev_tcp.entry(handle) {
+            MapEntry::Occupied(_) => return Err(Error::AlreadyInUse),
+            MapEntry::Vacant(e) => e,
+        };
+
+        let rev_key = (tcp_socket.local_endpoint(), tcp_socket.remote_endpoint());
         let tcp_endpoint = self.tcp
             .entry(tcp_socket.local_endpoint())
             .or_insert_with(TcpLocalEndpoint::new);
 
-        if tcp_socket.remote_endpoint() == IpEndpoint::default() {
+        if tcp_socket.remote_endpoint().is_unbound() {
             tcp_endpoint.listen_sockets.insert(handle);
+            rev_entry.insert(rev_key);
         } else {
             match tcp_endpoint
                 .established_sockets
                 .entry(tcp_socket.remote_endpoint()) {
                 MapEntry::Occupied(_) => return Err(Error::AlreadyInUse),
-                MapEntry::Vacant(e) => e.insert(handle),
+                MapEntry::Vacant(e) => {
+                    e.insert(handle);
+                    rev_entry.insert(rev_key);
+                }
             };
         }
         Ok(())
     }
 
-    pub fn tcp_socket_established(
-        &mut self,
-        tcp_socket: &TcpSocket,
-        handle: &SocketHandle,
-    ) -> Result<(), Error> {
-        if tcp_socket.local_endpoint() == IpEndpoint::default() ||
-            tcp_socket.remote_endpoint() == IpEndpoint::default()
-        {
-            return Err(Error::SocketNotFound);
-        }
-
-        let mut tcp_endpoint = self.tcp
-            .get_mut(&tcp_socket.local_endpoint())
-            .ok_or_else(|| Error::SocketNotFound)?;
-
-        if !tcp_endpoint.listen_sockets.remove(handle) {
-            return Err(Error::SocketNotFound);
-        }
-
-        match tcp_endpoint
-            .established_sockets
-            .entry(tcp_socket.remote_endpoint()) {
-            MapEntry::Occupied(_) => return Err(Error::AlreadyInUse),
-            MapEntry::Vacant(e) => e.insert(*handle),
-        };
-
-        Ok(())
-    }
-
-    pub fn remove_socket(&mut self, socket: &Socket, handle: &SocketHandle) -> Result<(), Error> {
+    pub fn remove_socket(&mut self, socket: &Socket, handle: SocketHandle) -> Result<(), Error> {
         match *socket {
-            Socket::Udp(ref udp_socket) => self.remove_udp_socket(udp_socket, handle),
-            Socket::Tcp(ref tcp_socket) => self.remove_tcp_scoket(tcp_socket, handle),
-            Socket::Raw(ref raw_socket) => self.remove_raw_socket(raw_socket, handle),
+            Socket::Udp(_) => self.remove_udp_socket(handle),
+            Socket::Tcp(_) => self.remove_tcp_socket(handle),
+            Socket::Raw(_) => self.remove_raw_socket(handle),
             _ => unreachable!(),
         }
     }
 
-    pub fn remove_udp_socket(
-        &mut self,
-        udp_socket: &UdpSocket,
-        handle: &SocketHandle,
-    ) -> Result<(), Error> {
-        match self.udp.entry(udp_socket.endpoint()) {
-            MapEntry::Occupied(o) => {
-                if *o.get() == *handle {
-                    o.remove();
-                    Ok(())
-                } else {
-                    Err(Error::SocketNotFound)
-                }
-            }
+    pub fn remove_udp_socket(&mut self, handle: SocketHandle) -> Result<(), Error> {
+        match self.rev_udp.entry(handle) {
             MapEntry::Vacant(_) => Err(Error::SocketNotFound),
-        }
-    }
-
-    pub fn remove_raw_socket(
-        &mut self,
-        raw_socket: &RawSocket,
-        handle: &SocketHandle,
-    ) -> Result<(), Error> {
-        let key = (raw_socket.ip_version(), raw_socket.ip_protocol());
-        match self.raw.entry(key) {
-            MapEntry::Occupied(o) => {
-                if *o.get() == *handle {
-                    o.remove();
-                    Ok(())
-                } else {
-                    Err(Error::SocketNotFound)
-                }
-            }
-            MapEntry::Vacant(_) => Err(Error::SocketNotFound),
-        }
-    }
-
-    pub fn remove_tcp_scoket(
-        &mut self,
-        tcp_socket: &TcpSocket,
-        handle: &SocketHandle,
-    ) -> Result<(), Error> {
-        if tcp_socket.local_endpoint() == IpEndpoint::default() {
-            return Err(Error::SocketNotFound);
-        }
-
-        let mut tcp_endpoint = self.tcp
-            .get_mut(&tcp_socket.local_endpoint())
-            .ok_or_else(|| Error::SocketNotFound)?;
-
-        if tcp_socket.remote_endpoint() == IpEndpoint::default() {
-            if tcp_endpoint.listen_sockets.remove(handle) {
-                Ok(())
-            } else {
-                Err(Error::SocketNotFound)
-            }
-        } else {
-            match tcp_endpoint
-                .established_sockets
-                .entry(tcp_socket.remote_endpoint()) {
-                MapEntry::Occupied(o) => {
-                    if *o.get() == *handle {
-                        o.remove();
+            MapEntry::Occupied(re) => {
+                match self.udp.entry(*re.get()) {
+                    MapEntry::Vacant(_) => Err(Error::SocketNotFound),
+                    MapEntry::Occupied(e) => {
+                        e.remove();
+                        re.remove();
                         Ok(())
-                    } else {
-                        Err(Error::SocketNotFound)
                     }
                 }
-                MapEntry::Vacant(_) => Err(Error::SocketNotFound),
             }
         }
     }
 
-    pub fn get_raw_sockets<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
+    pub fn remove_raw_socket(&mut self, handle: SocketHandle) -> Result<(), Error> {
+        match self.rev_raw.entry(handle) {
+            MapEntry::Vacant(_) => Err(Error::SocketNotFound),
+            MapEntry::Occupied(re) => {
+                match self.raw.entry(*re.get()) {
+                    MapEntry::Vacant(_) => Err(Error::SocketNotFound),
+                    MapEntry::Occupied(e) => {
+                        e.remove();
+                        re.remove();
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn remove_tcp_socket(&mut self, handle: SocketHandle) -> Result<(), Error> {
+        let re = match self.rev_tcp.entry(handle) {
+            MapEntry::Vacant(_) => return Err(Error::SocketNotFound),
+            MapEntry::Occupied(re) => re,
+        };
+
+        let &(local_endpoint, remote_endpoint) = re.get();
+
+        let mut tc_endpoint_entry = match self.tcp.entry(local_endpoint) {
+            MapEntry::Vacant(_) => return Err(Error::SocketNotFound),
+            MapEntry::Occupied(e) => e,
+        };
+
+        {
+            let mut tcp_endpoint = tc_endpoint_entry.get_mut();
+
+            if remote_endpoint.is_unbound() {
+                if tcp_endpoint.listen_sockets.remove(&handle) {
+                    re.remove();
+                } else {
+                    return Err(Error::SocketNotFound);
+                }
+            } else {
+                match tcp_endpoint.established_sockets.entry(remote_endpoint) {
+                    MapEntry::Occupied(o) => {
+                        o.remove();
+                        re.remove();
+                    }
+                    MapEntry::Vacant(_) => return Err(Error::SocketNotFound),
+                }
+            }
+        }
+
+        if tc_endpoint_entry.get().listen_sockets.is_empty() &&
+            tc_endpoint_entry.get().established_sockets.is_empty()
+        {
+            tc_endpoint_entry.remove();
+        }
+
+        Ok(())
+    }
+
+    pub fn get_raw_socket<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
         &self,
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_version: IpVersion,
         ip_protocol: IpProtocol,
-    ) -> Iter<'d, RawSocket<'b, 'c>> {
+    ) -> WithHandle<'d, RawSocket<'b, 'c>> {
         let key = (ip_version, ip_protocol);
-        Iter::new(
-            self.raw
-                .get(&key)
-                .map(move |handle| (set.get_mut(*handle), handle))
-                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
-        )
+        self.raw
+            .get(&key)
+            .map(move |handle| (set.get_mut(*handle), handle))
+            .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h)))
     }
 
-    pub fn get_udp_sockets<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
+    pub fn get_udp_socket<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
         &self,
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_repr: &IpRepr,
         udp_repr: &UdpRepr,
-    ) -> Iter<'d, UdpSocket<'b, 'c>> {
-        Iter::new(
-            DispatchTable::get_l3_socket(
-                &self.udp,
-                IpEndpoint::new(ip_repr.dst_addr(), udp_repr.dst_port),
-            ).map(move |handle| (set.get_mut(*handle), handle))
-                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
-        )
+    ) -> WithHandle<'d, UdpSocket<'b, 'c>> {
+        DispatchTable::get_l3_socket(
+            &self.udp,
+            IpEndpoint::new(ip_repr.dst_addr(), udp_repr.dst_port),
+        ).map(move |handle| (set.get_mut(*handle), handle))
+            .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h)))
     }
 
-    pub fn get_tcp_sockets<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
+    pub fn get_tcp_socket<'a, 'b: 'a, 'c: 'a + 'b, 'd>(
         &self,
         set: &'d mut SocketSet<'a, 'b, 'c>,
         ip_repr: &IpRepr,
         tcp_repr: &TcpRepr,
-    ) -> Iter<'d, TcpSocket<'b>> {
-        Iter::new(
-            DispatchTable::get_l3_socket(
-                &self.tcp,
-                IpEndpoint::new(ip_repr.dst_addr(), tcp_repr.dst_port),
-            ).and_then(|tcp_endpoint| {
-                tcp_endpoint
-                    .established_sockets
-                    .get(&IpEndpoint::new(ip_repr.src_addr(), tcp_repr.src_port))
-                    .or_else(|| tcp_endpoint.listen_sockets.iter().next())
-            })
-                .map(move |handle| (set.get_mut(*handle), handle))
-                .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h))),
-        )
+    ) -> WithHandle<'d, TcpSocket<'b>> {
+        DispatchTable::get_l3_socket(
+            &self.tcp,
+            IpEndpoint::new(ip_repr.dst_addr(), tcp_repr.dst_port),
+        ).and_then(|tcp_endpoint| {
+            tcp_endpoint
+                .established_sockets
+                .get(&IpEndpoint::new(ip_repr.src_addr(), tcp_repr.src_port))
+                .or_else(|| tcp_endpoint.listen_sockets.iter().next())
+        })
+            .map(move |handle| (set.get_mut(*handle), handle))
+            .and_then(|(s, &h)| s.try_as_socket().map(|s| (s, h)))
     }
 
     fn get_l3_socket<T>(tree: &BTreeMap<IpEndpoint, T>, endpoint: IpEndpoint) -> Option<&T> {
@@ -270,98 +267,10 @@ impl DispatchTable {
                 if *addr == endpoint.addr || addr.is_unspecified() => Some(h),
             _ => {
                 match range.next() {
-                    Some((e, h)) if e.is_unspecified() => Some(h),
+                    Some((e, h)) if e.is_unbound() => Some(h),
                     _ => None,
                 }
             }
         }
-    }
-}
-
-pub struct Iter<'a, T: 'a> {
-    socket: Option<(&'a mut T, SocketHandle)>,
-}
-
-impl<'a, T: 'a> Iter<'a, T> {
-    pub fn new(socket: Option<(&'a mut T, SocketHandle)>) -> Iter<'a, T> {
-        Iter { socket }
-    }
-}
-
-impl<'a, T: 'a> Iterator for Iter<'a, T> {
-    type Item = (&'a mut T, SocketHandle);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.socket.take()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use socket::*;
-    use wire::*;
-    use super::*;
-
-    #[test]
-    fn dispater() {
-        let mut sockets = SocketSet::new(vec![]);
-
-        let tcp_rx_buffer = TcpSocketBuffer::new(vec![0; 64]);
-        let tcp_tx_buffer = TcpSocketBuffer::new(vec![0; 128]);
-        let tcp_socket = TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer);
-
-        let tcp_rx_buffer2 = TcpSocketBuffer::new(vec![0; 64]);
-        let tcp_tx_buffer2 = TcpSocketBuffer::new(vec![0; 128]);
-        let tcp_socket2 = TcpSocket::new(tcp_rx_buffer2, tcp_tx_buffer2);
-
-        let tcp_handle = sockets.add(tcp_socket);
-        let tcp_handle2 = sockets.add(tcp_socket2);
-
-        let ep_u = IpEndpoint::new(IpAddress::Unspecified, 12345u16);
-        let ep_1 = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::new(192, 168, 1, 1)), 12345u16);
-        let ep_2 = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::new(192, 168, 1, 2)), 12345u16);
-        let ep_3 = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::new(192, 168, 1, 3)), 12345u16);
-
-        let mut dispatcher = DispatchTable::new();
-        {
-            let tcp_socket: &mut TcpSocket = sockets.get_mut(tcp_handle).as_socket();
-            tcp_socket.set_debug_id(1);
-            assert_eq!(tcp_socket.listen(ep_u), Ok(()));
-        }
-        assert_eq!(
-            dispatcher.add_socket(&sockets.get(tcp_handle), tcp_handle),
-            Ok(())
-        );
-        {
-            let tcp_socket2: &mut TcpSocket = sockets.get_mut(tcp_handle2).as_socket();
-            tcp_socket2.set_debug_id(2);
-            assert_eq!(tcp_socket2.listen(ep_2), Ok(()));
-        }
-        assert_eq!(
-            dispatcher.add_socket(&sockets.get(tcp_handle2), tcp_handle2),
-            Ok(())
-        );
-
-        // assert_eq!(
-        //     dispatcher
-        //         .get_tcp_sockets(&mut sockets, ep_1.addr, ep_1.port)
-        //         .map(|s| s.debug_id())
-        //         .collect::<Vec<_>>(),
-        //     vec![1]
-        // );
-        // assert_eq!(
-        //     dispatcher
-        //         .get_tcp_sockets(&mut sockets, ep_2.addr, ep_2.port)
-        //         .map(|s| s.debug_id())
-        //         .collect::<Vec<_>>(),
-        //     vec![2]
-        // );
-        // assert_eq!(
-        //     dispatcher
-        //         .get_tcp_sockets(&mut sockets, ep_3.addr, ep_3.port)
-        //         .map(|s| s.debug_id())
-        //         .collect::<Vec<_>>(),
-        //     vec![1]
-        // );
     }
 }

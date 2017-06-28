@@ -11,7 +11,7 @@ use std::time::Instant;
 use smoltcp::Error;
 use smoltcp::wire::{EthernetAddress, IpAddress};
 use smoltcp::iface::{ArpCache, SliceArpCache, EthernetInterface};
-use smoltcp::socket::{AsSocket, SocketSet};
+use smoltcp::socket::{SocketContainer};
 use smoltcp::socket::{UdpSocket, UdpSocketBuffer, UdpPacketBuffer};
 use smoltcp::socket::{TcpSocket, TcpSocketBuffer};
 
@@ -52,17 +52,17 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, protocol_addrs);
 
-    let mut sockets = SocketSet::new(vec![]);
-    let udp_handle  = sockets.add(udp_socket);
-    let tcp1_handle = sockets.add(tcp1_socket);
-    let tcp2_handle = sockets.add(tcp2_socket);
-    let tcp3_handle = sockets.add(tcp3_socket);
+    let mut sockets = SocketContainer::new(vec![]);
+    let udp_handle  = sockets.add(udp_socket).unwrap();
+    let tcp1_handle = sockets.add(tcp1_socket).unwrap();
+    let tcp2_handle = sockets.add(tcp2_socket).unwrap();
+    let tcp3_handle = sockets.add(tcp3_socket).unwrap();
 
     let mut tcp_6970_active = false;
     loop {
         // udp:6969: respond "yo dawg"
         {
-            let socket: &mut UdpSocket = sockets.get_mut(udp_handle).as_socket();
+            let mut socket = sockets.get_mut::<UdpSocket>(udp_handle).unwrap();
             if socket.endpoint().is_unspecified() {
                 socket.bind(6969)
             }
@@ -85,7 +85,7 @@ fn main() {
 
         // tcp:6969: respond "yo dawg"
         {
-            let socket: &mut TcpSocket = sockets.get_mut(tcp1_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(tcp1_handle).unwrap();
             if !socket.is_open() {
                 socket.listen(6969).unwrap();
             }
@@ -102,7 +102,7 @@ fn main() {
 
         // tcp:6970: echo with reverse
         {
-            let socket: &mut TcpSocket = sockets.get_mut(tcp2_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(tcp2_handle).unwrap();
             if !socket.is_open() {
                 socket.listen(6970).unwrap()
             }
@@ -139,7 +139,7 @@ fn main() {
 
         // tcp:6971: sinkhole
         {
-            let socket: &mut TcpSocket = sockets.get_mut(tcp3_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(tcp3_handle).unwrap();
             if !socket.is_open() {
                 socket.listen(6971).unwrap()
             }

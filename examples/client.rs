@@ -11,7 +11,7 @@ use std::time::Instant;
 use smoltcp::Error;
 use smoltcp::wire::{EthernetAddress, IpAddress};
 use smoltcp::iface::{ArpCache, SliceArpCache, EthernetInterface};
-use smoltcp::socket::{AsSocket, SocketSet};
+use smoltcp::socket::{SocketContainer};
 use smoltcp::socket::{TcpSocket, TcpSocketBuffer};
 
 fn main() {
@@ -43,18 +43,18 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, [protocol_addr]);
 
-    let mut sockets = SocketSet::new(vec![]);
-    let tcp_handle = sockets.add(tcp_socket);
+    let mut sockets = SocketContainer::new(vec![]);
+    let tcp_handle = sockets.add(tcp_socket).unwrap();
 
     {
-        let socket: &mut TcpSocket = sockets.get_mut(tcp_handle).as_socket();
+        let mut socket = sockets.get_mut::<TcpSocket>(tcp_handle).unwrap();
         socket.connect((address, port), (protocol_addr, 49500)).unwrap();
     }
 
     let mut tcp_active = false;
     loop {
         {
-            let socket: &mut TcpSocket = sockets.get_mut(tcp_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(tcp_handle).unwrap();
             if socket.is_active() && !tcp_active {
                 debug!("connected");
             } else if !socket.is_active() && tcp_active {

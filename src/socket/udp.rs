@@ -153,26 +153,39 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
         Ok((buffer.len(), endpoint))
     }
 
-    pub(crate) fn process(&mut self, _timestamp: u64, ip_repr: &IpRepr,
-                          payload: &[u8]) -> Result<(), Error> {
-        debug_assert!(ip_repr.protocol() == IpProtocol::Udp);
+    pub(crate) fn would_accept(&mut self, ip_repr: &IpRepr, udp_repr: &UdpRepr) -> bool {
+        ip_repr.protocol() == IpProtocol::Udp &&
+            udp_repr.dst_port == self.endpoint.port &&
+            (self.endpoint.addr.is_unspecified() ||
+             self.endpoint.addr == ip_repr.dst_addr())
+    }
 
-        let packet = UdpPacket::new_checked(&payload[..ip_repr.payload_len()])?;
-        let repr = UdpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
-
-        if repr.dst_port != self.endpoint.port { return Err(Error::Rejected) }
-        if !self.endpoint.addr.is_unspecified() {
-            if self.endpoint.addr != ip_repr.dst_addr() { return Err(Error::Rejected) }
-        }
+    pub(crate) fn process_accepted(&mut self, _timetamp: u64, ip_repr: &IpRepr,
+                            udp_repr: &UdpRepr) -> Result<(), Error> {
+        debug_assert!(self.would_accept(ip_repr, udp_repr));
 
         let packet_buf = self.rx_buffer.enqueue().map_err(|()| Error::Exhausted)?;
-        packet_buf.endpoint = IpEndpoint { addr: ip_repr.src_addr(), port: repr.src_port };
-        packet_buf.size = repr.payload.len();
-        packet_buf.as_mut()[..repr.payload.len()].copy_from_slice(repr.payload);
+        packet_buf.endpoint = IpEndpoint { addr: ip_repr.src_addr(), port: udp_repr.src_port };
+        packet_buf.size = udp_repr.payload.len();
+        packet_buf.as_mut()[..udp_repr.payload.len()].copy_from_slice(udp_repr.payload);
         net_trace!("[{}]{}:{}: receiving {} octets",
                    self.debug_id, self.endpoint,
                    packet_buf.endpoint, packet_buf.size);
         Ok(())
+    }
+
+    /// See [Socket::process](enum.Socket.html#method.process).
+    pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
+                   payload: &[u8]) -> Result<(), Error> {
+
+        let packet = UdpPacket::new_checked(&payload[..ip_repr.payload_len()])?;
+        let repr = UdpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
+
+        if !self.would_accept(ip_repr, &repr) {
+            return Err(Error::Rejected);
+        }
+
+        self.process_accepted(timestamp, ip_repr, &repr)
     }
 
     pub(crate) fn dispatch<F, R>(&mut self, _timestamp: u64, _limits: &DeviceLimits,

@@ -168,6 +168,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     pub fn iter_mut<'d>(&'d mut self) -> IterMut<'d, 'b, 'c> {
         IterMut { lower: self.sockets.iter_mut() }
     }
+
+    pub fn iter_mut_with_handle<'d>(&'d mut self) -> IterMutWithHandle<'d, 'b, 'c> {
+        IterMutWithHandle { lower: self.sockets.iter_mut(), index: 0 }
+    }
 }
 
 /// Immutable socket set iterator.
@@ -211,3 +215,24 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for IterMut<'a, 'b, 'c> {
         None
     }
 }
+
+pub struct IterMutWithHandle<'a, 'b: 'a, 'c: 'a + 'b> {
+    lower: slice::IterMut<'a, Option<Item<'b, 'c>>>,
+    index: usize,
+}
+
+impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for IterMutWithHandle<'a, 'b, 'c> {
+    type Item = (&'a mut Socket<'b, 'c>, Handle);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(item_opt) = self.lower.next() {
+            if let Some(item) = item_opt.as_mut() {
+                let handle = Handle { index: self.index };
+                self.index += 1;
+                return Some((&mut item.socket, handle))
+            }
+        }
+        None
+    }
+}
+

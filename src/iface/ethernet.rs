@@ -6,9 +6,10 @@ use wire::{EthernetAddress, EthernetProtocol, EthernetFrame};
 use wire::{ArpPacket, ArpRepr, ArpOperation};
 use wire::{Ipv4Packet, Ipv4Repr};
 use wire::{Icmpv4Packet, Icmpv4Repr, Icmpv4DstUnreachable};
-use wire::{IpAddress, IpProtocol, IpRepr};
+use wire::{IpAddress, IpProtocol, IpRepr, IpVersion};
 use wire::{TcpPacket, TcpRepr, TcpControl};
-use socket::{Socket, SocketSet, RawSocket, TcpSocket, UdpSocket, AsSocket};
+use wire::{UdpPacket, UdpRepr};
+use socket::{SocketContainer};
 use super::ArpCache;
 
 /// An Ethernet network interface.
@@ -109,7 +110,7 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
     /// handling the given set of sockets.
     ///
     /// The timestamp is a monotonically increasing number of milliseconds.
-    pub fn poll(&mut self, sockets: &mut SocketSet, timestamp: u64) -> Result<(), Error> {
+    pub fn poll(&mut self, sockets: &mut SocketContainer, timestamp: u64) -> Result<(), Error> {
         // First, transmit any outgoing packets.
         loop {
             if self.emit(sockets, timestamp)? { break }
@@ -187,7 +188,7 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
     }
 
     fn process_ipv4<'frame, T: AsRef<[u8]>>
-                   (&mut self, sockets: &mut SocketSet, timestamp: u64,
+                   (&mut self, sockets: &mut SocketContainer, timestamp: u64,
                     eth_frame: &EthernetFrame<&'frame T>) ->
                    Result<Response<'frame>, Error> {
         let ipv4_packet = Ipv4Packet::new_checked(eth_frame.payload())?;
@@ -206,16 +207,15 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
 
         // Pass every IP packet to all raw sockets we have registered.
         let mut handled_by_raw_socket = false;
-        for raw_socket in sockets.iter_mut().filter_map(
-                <Socket as AsSocket<RawSocket>>::try_as_socket) {
-            match raw_socket.process(timestamp, &IpRepr::Ipv4(ipv4_repr),
-                                     ipv4_packet.payload()) {
+        if let Some(mut raw_socket) = sockets.get_raw_socket(IpVersion::Ipv4, ipv4_repr.protocol) {
+            match raw_socket.process_accepted(timestamp, &IpRepr::Ipv4(ipv4_repr),
+                                              ipv4_packet.payload()) {
                 // The packet is valid and handled by socket.
                 Ok(()) => handled_by_raw_socket = true,
                 // The packet isn't addressed to the socket, or cannot be accepted by it.
-                Err(Error::Rejected) | Err(Error::Exhausted) => (),
+                Err(Error::Rejected) => (),
                 // Raw sockets either accept or reject packets, not parse them.
-                _ => unreachable!(),
+                Err(e) => return Err(e),
             }
         }
 
@@ -282,58 +282,20 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
         }
     }
 
-    fn process_udpv4<'frame>(sockets: &mut SocketSet, timestamp: u64,
+    fn process_tcpv4<'frame>(sockets: &mut SocketContainer, timestamp: u64,
                              ipv4_repr: Ipv4Repr, ip_payload: &'frame [u8]) ->
                             Result<Response<'frame>, Error> {
         let ip_repr = IpRepr::Ipv4(ipv4_repr);
+        let tcp_packet = TcpPacket::new_checked(ip_payload)?;
+        let tcp_repr = TcpRepr::parse(&tcp_packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
 
-        for udp_socket in sockets.iter_mut().filter_map(
-                <Socket as AsSocket<UdpSocket>>::try_as_socket) {
-            match udp_socket.process(timestamp, &ip_repr, ip_payload) {
-                // The packet is valid and handled by socket.
-                Ok(()) => return Ok(Response::Nop),
-                // The packet isn't addressed to the socket.
-                Err(Error::Rejected) => continue,
-                // The packet is malformed, or addressed to the socket but cannot be accepted.
-                Err(e) => return Err(e)
-            }
-        }
-
-        // The packet wasn't handled by a socket, send an ICMP port unreachable packet.
-        let icmp_reply_repr = Icmpv4Repr::DstUnreachable {
-            reason: Icmpv4DstUnreachable::PortUnreachable,
-            header: ipv4_repr,
-            data:   &ip_payload[0..8]
-        };
-        let ipv4_reply_repr = Ipv4Repr {
-            src_addr:    ipv4_repr.dst_addr,
-            dst_addr:    ipv4_repr.src_addr,
-            protocol:    IpProtocol::Icmp,
-            payload_len: icmp_reply_repr.buffer_len()
-        };
-        Ok(Response::Icmpv4(ipv4_reply_repr, icmp_reply_repr))
-    }
-
-    fn process_tcpv4<'frame>(sockets: &mut SocketSet, timestamp: u64,
-                             ipv4_repr: Ipv4Repr, ip_payload: &'frame [u8]) ->
-                            Result<Response<'frame>, Error> {
-        let ip_repr = IpRepr::Ipv4(ipv4_repr);
-
-        for tcp_socket in sockets.iter_mut().filter_map(
-                <Socket as AsSocket<TcpSocket>>::try_as_socket) {
-            match tcp_socket.process(timestamp, &ip_repr, ip_payload) {
-                // The packet is valid and handled by socket.
-                Ok(()) => return Ok(Response::Nop),
-                // The packet isn't addressed to the socket.
-                // Send RST only if no other socket accepts the packet.
-                Err(Error::Rejected) => continue,
-                // The packet is malformed, or addressed to the socket but cannot be accepted.
-                Err(e) => return Err(e)
-            }
+        if let Some(mut tcp_socket) = sockets.get_tcp_socket(&ip_repr, &tcp_repr) {
+            return tcp_socket
+                .process_accepted(timestamp, &ip_repr, &tcp_repr)
+                .map(|_|Response::Nop);
         }
 
         // The packet wasn't handled by a socket, send a TCP RST packet.
-        let tcp_packet = TcpPacket::new_checked(ip_payload)?;
         if tcp_packet.rst() {
             // Don't reply to a TCP RST packet with another TCP RST packet.
             return Ok(Response::Nop)
@@ -357,6 +319,34 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
             payload_len: tcp_reply_repr.buffer_len()
         };
         Ok(Response::Tcpv4(ipv4_reply_repr, tcp_reply_repr))
+    }
+
+    fn process_udpv4<'frame>(sockets: &mut SocketContainer, timestamp: u64,
+                             ipv4_repr: Ipv4Repr, ip_payload: &'frame [u8]) ->
+                            Result<Response<'frame>, Error> {
+        let ip_repr = IpRepr::Ipv4(ipv4_repr);
+        let packet = UdpPacket::new_checked(&ip_payload[..ip_repr.payload_len()])?;
+        let udp_repr = UdpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
+
+        if let Some(mut udp_socket) = sockets.get_udp_socket(&ip_repr, &udp_repr) {
+            return udp_socket
+                .process_accepted(timestamp, &ip_repr, &udp_repr)
+                .map(|_|Response::Nop);
+        }
+
+        //The packet wasn't handled by a socket, send an ICMP port unreachable packet.
+        let icmp_reply_repr = Icmpv4Repr::DstUnreachable {
+            reason: Icmpv4DstUnreachable::PortUnreachable,
+            header: ipv4_repr,
+            data:   &ip_payload[0..8]
+        };
+        let ipv4_reply_repr = Ipv4Repr {
+            src_addr:    ipv4_repr.dst_addr,
+            dst_addr:    ipv4_repr.src_addr,
+            protocol:    IpProtocol::Icmp,
+            payload_len: icmp_reply_repr.buffer_len()
+        };
+        Ok(Response::Icmpv4(ipv4_reply_repr, icmp_reply_repr))
     }
 
     fn send_response(&mut self, timestamp: u64, response: Response) -> Result<(), Error> {
@@ -428,7 +418,7 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
         }
     }
 
-    fn emit(&mut self, sockets: &mut SocketSet, timestamp: u64) -> Result<bool, Error> {
+    fn emit(&mut self, sockets: &mut SocketContainer, timestamp: u64) -> Result<bool, Error> {
         // Borrow checker is being overly careful around closures, so we have
         // to hack around that.
         let src_hardware_addr = self.hardware_addr;
