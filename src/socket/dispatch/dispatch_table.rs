@@ -244,7 +244,7 @@ impl DispatchTable {
                 if *addr == endpoint.addr || addr.is_unspecified() => Some(h),
             _ => {
                 match range.next() {
-                    Some((e, h)) if e.is_unbound() => Some(h),
+                    Some((e, h)) if e.is_unspecified() => Some(h),
                     _ => None,
                 }
             }
