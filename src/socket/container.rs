@@ -7,6 +7,9 @@ use super::set::{Set as SocketSet, Item as SocketSetItem,
                  Handle as SocketHandle, IterMut as SetIterMut};
 use wire::{IpVersion, IpProtocol, IpRepr, UdpRepr, TcpRepr, IpEndpoint};
 
+/// A container of sockets with packet dispathing.
+///
+/// The lifetimes `'b` and `'c` are used when storing a `Socket<'b, 'c>`.
 #[derive(Debug)]
 pub struct Container<'a, 'b: 'a, 'c: 'a + 'b> {
     set: SocketSet<'a, 'b, 'c>,
@@ -14,8 +17,9 @@ pub struct Container<'a, 'b: 'a, 'c: 'a + 'b> {
 }
 
 impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
+    /// Create a new socket container using the provided storage
     pub fn new<SocketsT>(sockets: SocketsT) -> Container<'a, 'b, 'c>
-    where SocketsT: Into<ManagedSlice<'a, Option<SocketSetItem<'b, 'c>>>>,
+        where SocketsT: Into<ManagedSlice<'a, Option<SocketSetItem<'b, 'c>>>>,
     {
         Container {
             set: SocketSet::new(sockets),
@@ -23,6 +27,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
+    /// Add a socket to the set with the reference count 1, and return its handle.
+    ///
+    /// # Panics
+    /// This function panics if the storage is fixed-size (not a `Vec`) and is full.
     pub fn add(&mut self, socket: Socket<'b, 'c>) -> Result<SocketHandle, Error> {
         let handle = self.set.add(socket);
         self.dispatch_table
@@ -30,6 +38,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         Ok(handle)
     }
 
+    /// Get a tracked socket from the container by its handle, as mutable.
+    ///
+    /// # Panics
+    /// This function may panic if the handle does not belong to this socket set.
     pub fn get_mut<'d, T>(&'d mut self, handle: SocketHandle) -> Option<SocketTracker<'d, T>>
         where T: TrackedSocket + 'd, Socket<'b, 'c>: AsSocket<T>
     {
@@ -40,9 +52,14 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
+    /// Remove a socket from the container, without changing its state.
+    ///
+    /// # Panics
+    /// This function may panic if the handle does not belong to this socket set.
     pub fn remove(&mut self, handle: SocketHandle) -> Socket<'b, 'c> {
         let socket = self.set.remove(handle);
-        let _ = self.dispatch_table.remove_socket(&socket, handle);
+        let res = self.dispatch_table.remove_socket(&socket, handle);
+        debug_assert!(res.is_ok());
         socket
     }
 
@@ -96,6 +113,9 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     }
 }
 
+/// A trait for socket-type-depending tracking logic.
+///
+/// Used for upkeel of dispatching tables.
 pub trait TrackedSocket {
     type State;
 
@@ -165,6 +185,10 @@ impl<'a> TrackedSocket for TcpSocket<'a> {
     }
 }
 
+/// A tracking smart-pointer to a socket.
+///
+/// Implements `Deref` and `DerefMut` to the socket it contains.
+/// Keeps the dispatching tables up to date by updating them in `drop`.
 #[derive(Debug)]
 pub struct SocketTracker<'a, T: TrackedSocket + 'a> {
     handle: SocketHandle,

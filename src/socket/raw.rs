@@ -150,10 +150,12 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         Ok(buffer.len())
     }
 
+    /// Determine whatever the socket would accept a packet.
     pub(crate) fn would_accept(&self, ip_version: IpVersion, ip_protocol: IpProtocol) -> bool {
         ip_version == self.ip_version && ip_protocol == self.ip_protocol
     }
 
+    /// Process a packed, assuming it was accepted by `would_accept`.
     pub(crate) fn process_accepted(&mut self, _timestamp: u64, ip_repr: &IpRepr,
                             payload: &[u8]) -> Result<(), Error> {
         debug_assert!(self.would_accept(IpVersion::Ipv4, ip_repr.protocol()));

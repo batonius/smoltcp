@@ -153,6 +153,7 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
         Ok((buffer.len(), endpoint))
     }
 
+    /// Determine whatever the socket would accept a packet.
     pub(crate) fn would_accept(&mut self, ip_repr: &IpRepr, udp_repr: &UdpRepr) -> bool {
         ip_repr.protocol() == IpProtocol::Udp &&
             udp_repr.dst_port == self.endpoint.port &&
@@ -160,6 +161,7 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
              self.endpoint.addr == ip_repr.dst_addr())
     }
 
+    /// Process a packed, assuming it was accepted by `would_accept`.
     pub(crate) fn process_accepted(&mut self, _timetamp: u64, ip_repr: &IpRepr,
                             udp_repr: &UdpRepr) -> Result<(), Error> {
         debug_assert!(self.would_accept(ip_repr, udp_repr));

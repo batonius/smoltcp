@@ -34,7 +34,7 @@ pub use self::tcp::State as TcpState;
 pub use self::tcp::TcpSocket;
 
 pub use self::set::{Item as SocketSetItem, Handle as SocketHandle};
-pub use self::container::{Container as SocketContainer};
+pub use self::container::{Container as SocketContainer, SocketTracker};
 
 /// A network socket.
 ///

@@ -648,6 +648,7 @@ impl<'a> TcpSocket<'a> {
         self.state = state
     }
 
+    /// Determine whatever the socket would accept a packet.
     pub fn would_accept(&self, ip_repr: &IpRepr, tcp_repr: &TcpRepr) -> bool {
         ip_repr.protocol() == IpProtocol::Tcp &&
             self.local_endpoint.port == tcp_repr.dst_port &&
@@ -662,7 +663,7 @@ impl<'a> TcpSocket<'a> {
              tcp_repr.ack_number.is_none())
     }
 
-    /// See [Socket::process](enum.Socket.html#method.process).
+    /// Process a packed, assuming it was accepted by `would_accept`.
     pub fn process_accepted(&mut self, timestamp: u64, ip_repr: &IpRepr,
                             &repr: &TcpRepr) -> Result<(), Error> {
         debug_assert!(self.would_accept(ip_repr, &repr));
