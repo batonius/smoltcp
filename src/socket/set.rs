@@ -24,7 +24,7 @@ pub struct Handle {
 ///
 /// The lifetimes `'b` and `'c` are used when storing a `Socket<'b, 'c>`.
 #[derive(Debug)]
-pub struct Set<'a, 'b: 'a, 'c: 'a + 'b> {
+pub(crate) struct Set<'a, 'b: 'a, 'c: 'a + 'b> {
     sockets: ManagedSlice<'a, Option<Item<'b, 'c>>>
 }
 
@@ -109,6 +109,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     ///
     /// # Panics
     /// This function may panic if the handle does not belong to this socket set.
+    #[allow(dead_code)]
     pub fn retain(&mut self, handle: Handle) {
         self.sockets[handle.index]
             .as_mut()
@@ -121,6 +122,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     /// # Panics
     /// This function may panic if the handle does not belong to this socket set,
     /// or if the reference count is already zero.
+    #[allow(dead_code)]
     pub fn release(&mut self, handle: Handle) {
         let refs = &mut self.sockets[handle.index]
                             .as_mut()
@@ -134,6 +136,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     ///
     /// Pruning affects sockets with reference count 0. Open sockets are closed.
     /// Closed sockets are removed and dropped.
+    #[allow(dead_code)]
     pub fn prune(&mut self) {
         for (index, item) in self.sockets.iter_mut().enumerate() {
             let mut may_remove = false;
@@ -159,39 +162,14 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
         }
     }
 
-    /// Iterate every socket in this set.
-    pub fn iter<'d>(&'d self) -> Iter<'d, 'b, 'c> {
-        Iter { lower: self.sockets.iter() }
-    }
-
     /// Iterate every socket in this set, as mutable.
     pub fn iter_mut<'d>(&'d mut self) -> IterMut<'d, 'b, 'c> {
         IterMut { lower: self.sockets.iter_mut() }
     }
 
+    #[cfg(not(any(feature = "std", feature = "collections")))]
     pub fn iter_mut_with_handle<'d>(&'d mut self) -> IterMutWithHandle<'d, 'b, 'c> {
         IterMutWithHandle { lower: self.sockets.iter_mut(), index: 0 }
-    }
-}
-
-/// Immutable socket set iterator.
-///
-/// This struct is created by the [iter](struct.SocketSet.html#method.iter)
-/// on [socket sets](struct.SocketSet.html).
-pub struct Iter<'a, 'b: 'a, 'c: 'a + 'b> {
-    lower: slice::Iter<'a, Option<Item<'b, 'c>>>
-}
-
-impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for Iter<'a, 'b, 'c> {
-    type Item = &'a Socket<'b, 'c>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(item_opt) = self.lower.next() {
-            if let Some(item) = item_opt.as_ref() {
-                return Some(&item.socket)
-            }
-        }
-        None
     }
 }
 
@@ -216,11 +194,13 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for IterMut<'a, 'b, 'c> {
     }
 }
 
+#[cfg(not(any(feature = "std", feature = "collections")))]
 pub struct IterMutWithHandle<'a, 'b: 'a, 'c: 'a + 'b> {
     lower: slice::IterMut<'a, Option<Item<'b, 'c>>>,
     index: usize,
 }
 
+#[cfg(not(any(feature = "std", feature = "collections")))]
 impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for IterMutWithHandle<'a, 'b, 'c> {
     type Item = (&'a mut Socket<'b, 'c>, Handle);
 

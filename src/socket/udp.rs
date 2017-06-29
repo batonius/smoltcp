@@ -174,22 +174,9 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
         Ok(())
     }
 
-    /// See [Socket::process](enum.Socket.html#method.process).
-    pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
-                   payload: &[u8]) -> Result<(), Error> {
-
-        let packet = UdpPacket::new_checked(&payload[..ip_repr.payload_len()])?;
-        let repr = UdpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
-
-        if !self.would_accept(ip_repr, &repr) {
-            return Err(Error::Rejected);
-        }
-
-        self.process_accepted(timestamp, ip_repr, &repr)
-    }
-
+    /// See [Socket::dispatch](enum.Socket.html#method.dispatch).
     pub(crate) fn dispatch<F, R>(&mut self, _timestamp: u64, _limits: &DeviceLimits,
-                                 emit: &mut F) -> Result<R, Error>
+                          emit: &mut F) -> Result<R, Error>
             where F: FnMut(&IpRepr, &IpPayload) -> Result<R, Error> {
         let packet_buf = self.tx_buffer.dequeue().map_err(|()| Error::Exhausted)?;
         net_trace!("[{}]{}:{}: sending {} octets",

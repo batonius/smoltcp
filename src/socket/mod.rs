@@ -33,8 +33,7 @@ pub use self::tcp::SocketBuffer as TcpSocketBuffer;
 pub use self::tcp::State as TcpState;
 pub use self::tcp::TcpSocket;
 
-pub use self::set::{Set as SocketSet, Item as SocketSetItem, Handle as SocketHandle};
-pub use self::set::{Iter as SocketSetIter, IterMut as SocketSetIterMut};
+pub use self::set::{Item as SocketSetItem, Handle as SocketHandle};
 pub use self::container::{Container as SocketContainer};
 
 /// A network socket.
@@ -108,22 +107,12 @@ pub trait IpPayload {
 /// This trait is used to concisely downcast [Socket](trait.Socket.html) values to their
 /// concrete types.
 pub trait AsSocket<T> {
-    fn as_socket(&mut self) -> &mut T;
     fn try_as_socket(&mut self) -> Option<&mut T>;
 }
 
 macro_rules! as_socket {
     ($socket:ty, $variant:ident) => {
         impl<'a, 'b> AsSocket<$socket> for Socket<'a, 'b> {
-            fn as_socket(&mut self) -> &mut $socket {
-                match self {
-                    &mut Socket::$variant(ref mut socket) => socket,
-                    _ => panic!(concat!(".as_socket::<",
-                                        stringify!($socket),
-                                        "> called on wrong socket type"))
-                }
-            }
-
             fn try_as_socket(&mut self) -> Option<&mut $socket> {
                 match self {
                     &mut Socket::$variant(ref mut socket) => Some(socket),

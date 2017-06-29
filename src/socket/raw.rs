@@ -169,16 +169,6 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         Ok(())
     }
 
-    /// See [Socket::process](enum.Socket.html#method.process).
-    pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
-                   payload: &[u8]) -> Result<(), Error> {
-        if !self.would_accept(IpVersion::Ipv4, ip_repr.protocol()) {
-            return Err(Error::Rejected);
-        }
-
-        self.process_accepted(timestamp, ip_repr, payload)
-    }
-
     /// See [Socket::dispatch](enum.Socket.html#method.dispatch).
     pub(crate) fn dispatch<F, R>(&mut self, _timestamp: u64, _limits: &DeviceLimits,
                                  emit: &mut F) -> Result<R, Error>

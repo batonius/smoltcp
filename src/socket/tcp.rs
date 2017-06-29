@@ -648,18 +648,6 @@ impl<'a> TcpSocket<'a> {
         self.state = state
     }
 
-    pub(crate) fn process(&mut self, timestamp: u64, ip_repr: &IpRepr,
-                   payload: &[u8]) -> Result<(), Error> {
-        let packet = TcpPacket::new_checked(&payload[..ip_repr.payload_len()])?;
-        let repr = TcpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
-
-        if !self.would_accept(ip_repr, &repr) {
-            return Err(Error::Rejected);
-        }
-
-        self.process_accepted(timestamp, ip_repr, &repr)
-    }
-
     pub fn would_accept(&self, ip_repr: &IpRepr, tcp_repr: &TcpRepr) -> bool {
         ip_repr.protocol() == IpProtocol::Tcp &&
             self.local_endpoint.port == tcp_repr.dst_port &&
@@ -1283,15 +1271,23 @@ mod test {
     fn send(socket: &mut TcpSocket, timestamp: u64, repr: &TcpRepr) -> Result<(), Error> {
         trace!("send: {}", repr);
         let mut buffer = vec![0; repr.buffer_len()];
-        let mut packet = TcpPacket::new(&mut buffer);
-        repr.emit(&mut packet, &REMOTE_IP, &LOCAL_IP);
+        {
+            let mut packet = TcpPacket::new(&mut buffer);
+            repr.emit(&mut packet, &REMOTE_IP, &LOCAL_IP);
+        }
         let ip_repr = IpRepr::Unspecified {
             src_addr:    REMOTE_IP,
             dst_addr:    LOCAL_IP,
             protocol:    IpProtocol::Tcp,
             payload_len: repr.buffer_len()
         };
-        socket.process(timestamp, &ip_repr, &packet.into_inner()[..])
+
+        let packet = TcpPacket::new_checked(&buffer[..ip_repr.payload_len()])?;
+        let repr = TcpRepr::parse(&packet, &ip_repr.src_addr(), &ip_repr.dst_addr())?;
+        if !socket.would_accept(&ip_repr, &repr) {
+            return Err(Error::Rejected);
+        }
+        socket.process_accepted(timestamp, &ip_repr, &repr)
     }
 
     fn recv<F>(socket: &mut TcpSocket, timestamp: u64, mut f: F)

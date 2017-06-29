@@ -1,11 +1,10 @@
 use Error;
-
-use managed::ManagedSlice;
-use super::set::{Set as SocketSet, Item as SocketSetItem, Handle as SocketHandle,
-                 IterMut as SetIterMut};
-use super::dispatch::DispatchTable;
-use socket::{TcpSocket, UdpSocket, RawSocket, Socket, AsSocket, TcpState};
 use core::ops::{Deref, DerefMut};
+use managed::ManagedSlice;
+use socket::{TcpSocket, UdpSocket, RawSocket, Socket, AsSocket, TcpState};
+use super::dispatch::DispatchTable;
+use super::set::{Set as SocketSet, Item as SocketSetItem,
+                 Handle as SocketHandle, IterMut as SetIterMut};
 use wire::{IpVersion, IpProtocol, IpRepr, UdpRepr, TcpRepr, IpEndpoint};
 
 #[derive(Debug)]
@@ -16,8 +15,7 @@ pub struct Container<'a, 'b: 'a, 'c: 'a + 'b> {
 
 impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     pub fn new<SocketsT>(sockets: SocketsT) -> Container<'a, 'b, 'c>
-    where
-        SocketsT: Into<ManagedSlice<'a, Option<SocketSetItem<'b, 'c>>>>,
+    where SocketsT: Into<ManagedSlice<'a, Option<SocketSetItem<'b, 'c>>>>,
     {
         Container {
             set: SocketSet::new(sockets),
@@ -33,9 +31,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     }
 
     pub fn get_mut<'d, T>(&'d mut self, handle: SocketHandle) -> Option<SocketTracker<'d, T>>
-    where
-        T: TrackedSocket + 'd,
-        Socket<'b, 'c>: AsSocket<T>,
+        where T: TrackedSocket + 'd, Socket<'b, 'c>: AsSocket<T>
     {
         if let Some(socket) = self.set.get_mut(handle).try_as_socket() {
             Some(SocketTracker::new(&mut self.dispatch_table, handle, socket))
@@ -50,14 +46,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         socket
     }
 
-    pub fn get_raw_socket<'d>(
-        &'d mut self,
-        ip_version: IpVersion,
-        ip_protocol: IpProtocol,
-    ) -> Option<SocketTracker<'d, RawSocket<'b, 'c>>> {
+    pub(crate) fn get_raw_socket<'d>(&'d mut self, ip_version: IpVersion, ip_protocol: IpProtocol)
+                                     -> Option<SocketTracker<'d, RawSocket<'b, 'c>>> {
         if let Some((raw_socket, handle)) =
-            self.dispatch_table
-                .get_raw_socket(&mut self.set, ip_version, ip_protocol)
+            self.dispatch_table.get_raw_socket(&mut self.set, ip_version, ip_protocol)
         {
             Some(SocketTracker::new(
                 &mut self.dispatch_table,
@@ -69,14 +61,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
-    pub fn get_udp_socket<'d>(
-        &'d mut self,
-        ip_repr: &IpRepr,
-        udp_repr: &UdpRepr,
-    ) -> Option<SocketTracker<'d, UdpSocket<'b, 'c>>> {
+    pub(crate) fn get_udp_socket<'d>(&'d mut self, ip_repr: &IpRepr, udp_repr: &UdpRepr)
+                                     -> Option<SocketTracker<'d, UdpSocket<'b, 'c>>> {
         if let Some((udp_socket, handle)) =
-            self.dispatch_table
-                .get_udp_socket(&mut self.set, ip_repr, udp_repr)
+            self.dispatch_table.get_udp_socket(&mut self.set, ip_repr, udp_repr)
         {
             Some(SocketTracker::new(
                 &mut self.dispatch_table,
@@ -88,14 +76,10 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
-    pub fn get_tcp_socket<'d>(
-        &'d mut self,
-        ip_repr: &IpRepr,
-        tcp_repr: &TcpRepr,
-    ) -> Option<SocketTracker<'d, TcpSocket<'b>>> {
+    pub(crate) fn get_tcp_socket<'d>(&'d mut self, ip_repr: &IpRepr, tcp_repr: &TcpRepr)
+                                     -> Option<SocketTracker<'d, TcpSocket<'b>>> {
         if let Some((tcp_socket, handle)) =
-            self.dispatch_table
-                .get_tcp_socket(&mut self.set, ip_repr, tcp_repr)
+            self.dispatch_table.get_tcp_socket(&mut self.set, ip_repr, tcp_repr)
         {
             Some(SocketTracker::new(
                 &mut self.dispatch_table,
@@ -107,7 +91,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
-    pub fn iter_mut<'d>(&'d mut self) -> SetIterMut<'d, 'b, 'c> {
+    pub(crate) fn iter_mut<'d>(&'d mut self) -> SetIterMut<'d, 'b, 'c> {
         self.set.iter_mut()
     }
 }
@@ -134,12 +118,8 @@ impl<'a, 'b: 'a> TrackedSocket for UdpSocket<'a, 'b> {
         udp_socket.endpoint()
     }
 
-    fn on_drop(
-        &old_endpoint: &Self::State,
-        dispatch_table: &mut DispatchTable,
-        socket: &mut Self,
-        handle: SocketHandle,
-    ) {
+    fn on_drop(&old_endpoint: &Self::State, dispatch_table: &mut DispatchTable,
+               socket: &mut Self, handle: SocketHandle) {
         if old_endpoint != socket.endpoint() {
             if !old_endpoint.is_unbound() {
                 let res = dispatch_table.remove_udp_socket(handle);
@@ -158,12 +138,8 @@ impl<'a> TrackedSocket for TcpSocket<'a> {
         tcp_socket.state()
     }
 
-    fn on_drop(
-        &old_state: &Self::State,
-        dispatch_table: &mut DispatchTable,
-        socket: &mut Self,
-        handle: SocketHandle,
-    ) {
+    fn on_drop(&old_state: &Self::State, dispatch_table: &mut DispatchTable,
+               socket: &mut Self, handle: SocketHandle) {
         if old_state == socket.state() {
             return;
         }
@@ -198,11 +174,7 @@ pub struct SocketTracker<'a, T: TrackedSocket + 'a> {
 }
 
 impl<'a, T: TrackedSocket + 'a> SocketTracker<'a, T> {
-    pub fn new(
-        dispatch_table: &'a mut DispatchTable,
-        handle: SocketHandle,
-        socket: &'a mut T,
-    ) -> Self {
+    fn new(dispatch_table: &'a mut DispatchTable, handle: SocketHandle, socket: &'a mut T) -> Self {
         let state = TrackedSocket::new_state(socket);
         SocketTracker {
             handle,
