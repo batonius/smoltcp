@@ -43,7 +43,7 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, [protocol_addr]);
 
-    let mut sockets = SocketContainer::new(vec![]);
+    let mut sockets = SocketContainer::new(vec![], vec![]);
     let tcp_handle = sockets.add(tcp_socket).unwrap();
 
     {

@@ -52,6 +52,7 @@ pub struct RawSocket<'a, 'b: 'a> {
     rx_buffer:   SocketBuffer<'a, 'b>,
     tx_buffer:   SocketBuffer<'a, 'b>,
     debug_id:    usize,
+    on_dirty_list: bool,
 }
 
 impl<'a, 'b> RawSocket<'a, 'b> {
@@ -66,6 +67,7 @@ impl<'a, 'b> RawSocket<'a, 'b> {
             rx_buffer,
             tx_buffer,
             debug_id: 0,
+            on_dirty_list: false,
         })
     }
 
@@ -192,6 +194,18 @@ impl<'a, 'b> RawSocket<'a, 'b> {
             }
             IpVersion::__Nonexhaustive => unreachable!()
         }
+    }
+
+    pub(crate) fn is_on_dirty_list(&self) -> bool {
+        self.on_dirty_list
+    }
+
+    pub(crate) fn set_on_dirty_list(&mut self, val: bool) {
+        self.on_dirty_list = val;
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        !self.tx_buffer.empty()
     }
 }
 

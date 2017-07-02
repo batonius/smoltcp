@@ -58,7 +58,7 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, [IpAddress::from(local_addr)]);
 
-    let mut sockets = SocketContainer::new(vec![]);
+    let mut sockets = SocketContainer::new(vec![], vec![]);
     let raw_handle = sockets.add(raw_socket).unwrap();
 
     let mut send_next = Duration::default();

@@ -263,7 +263,8 @@ pub struct TcpSocket<'a> {
     time_wait_since: u64,
     rx_buffer:       SocketBuffer<'a>,
     tx_buffer:       SocketBuffer<'a>,
-    debug_id:        usize
+    debug_id:        usize,
+    on_dirty_list:   bool,
 }
 
 const DEFAULT_MSS: usize = 536;
@@ -294,7 +295,8 @@ impl<'a> TcpSocket<'a> {
             time_wait_since: 0,
             tx_buffer:       tx_buffer.into(),
             rx_buffer:       rx_buffer.into(),
-            debug_id:        0
+            debug_id:        0,
+            on_dirty_list:   false,
         })
     }
 
@@ -1177,6 +1179,22 @@ impl<'a> TcpSocket<'a> {
             emit(&ip_repr, &repr)
         } else {
             Err(Error::Exhausted)
+        }
+    }
+
+    pub(crate) fn is_on_dirty_list(&self) -> bool {
+        self.on_dirty_list
+    }
+
+    pub(crate) fn set_on_dirty_list(&mut self, val: bool) {
+        self.on_dirty_list = val
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        // TODO: proper implementation
+        match self.state {
+            State::Closed | State::Listen | State::FinWait2 => false,
+            _ => true,
         }
     }
 }

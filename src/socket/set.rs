@@ -1,4 +1,5 @@
 use managed::ManagedSlice;
+#[cfg(not(any(feature = "std", feature = "collections")))]
 use core::slice;
 
 use super::Socket;
@@ -15,7 +16,7 @@ pub struct Item<'a, 'b: 'a> {
 }
 
 /// A handle, identifying a socket in a set.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 pub struct Handle {
     index: usize
 }
@@ -105,6 +106,11 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
         }
     }
 
+    /// Get capacity of the underlying storage
+    pub fn capacity(&self) -> usize {
+        self.sockets.len()
+    }
+
     /// Increase reference count by 1.
     ///
     /// # Panics
@@ -162,35 +168,9 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
         }
     }
 
-    /// Iterate every socket in this set, as mutable.
-    pub fn iter_mut<'d>(&'d mut self) -> IterMut<'d, 'b, 'c> {
-        IterMut { lower: self.sockets.iter_mut() }
-    }
-
     #[cfg(not(any(feature = "std", feature = "collections")))]
     pub fn iter_mut_with_handle<'d>(&'d mut self) -> IterMutWithHandle<'d, 'b, 'c> {
         IterMutWithHandle { lower: self.sockets.iter_mut(), index: 0 }
-    }
-}
-
-/// Mutable socket set iterator.
-///
-/// This struct is created by the [iter_mut](struct.SocketSet.html#method.iter_mut)
-/// on [socket sets](struct.SocketSet.html).
-pub struct IterMut<'a, 'b: 'a, 'c: 'a + 'b> {
-    lower: slice::IterMut<'a, Option<Item<'b, 'c>>>
-}
-
-impl<'a, 'b: 'a, 'c: 'a + 'b> Iterator for IterMut<'a, 'b, 'c> {
-    type Item = &'a mut Socket<'b, 'c>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(item_opt) = self.lower.next() {
-            if let Some(item) = item_opt.as_mut() {
-                return Some(&mut item.socket)
-            }
-        }
-        None
     }
 }
 

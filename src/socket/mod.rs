@@ -20,6 +20,7 @@ mod tcp;
 mod dispatch;
 mod set;
 mod container;
+mod tracker;
 
 pub use self::raw::PacketBuffer as RawPacketBuffer;
 pub use self::raw::SocketBuffer as RawSocketBuffer;
@@ -87,6 +88,18 @@ impl<'a, 'b> Socket<'a, 'b> {
                                  emit: &mut F) -> Result<R, Error>
             where F: FnMut(&IpRepr, &IpPayload) -> Result<R, Error> {
         dispatch_socket!(self, |socket [mut]| socket.dispatch(timestamp, limits, emit))
+    }
+
+    pub(crate) fn is_on_dirty_list(&self) -> bool {
+        dispatch_socket!(self, |socket []| socket.is_on_dirty_list())
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        dispatch_socket!(self, |socket []| socket.is_dirty())
+    }
+
+    pub(crate) fn set_on_dirty_list(&mut self, val: bool) {
+        dispatch_socket!(self, |socket [mut]| socket.set_on_dirty_list(val))
     }
 }
 

@@ -430,7 +430,8 @@ impl<'a, 'b, 'c, DeviceT: Device + 'a> Interface<'a, 'b, 'c, DeviceT> {
         limits.max_transmission_unit -= EthernetFrame::<&[u8]>::header_len();
 
         let mut nothing_to_transmit = true;
-        for socket in sockets.iter_mut() {
+        let mut dirty_iter = sockets.dirty_iter();
+        while let Some(mut socket) = dirty_iter.next() {
             let result = socket.dispatch(timestamp, &limits, &mut |repr, payload| {
                 let repr = repr.lower(src_protocol_addrs)?;
 

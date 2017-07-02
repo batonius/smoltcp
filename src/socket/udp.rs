@@ -54,7 +54,8 @@ pub struct UdpSocket<'a, 'b: 'a> {
     endpoint:  IpEndpoint,
     rx_buffer: SocketBuffer<'a, 'b>,
     tx_buffer: SocketBuffer<'a, 'b>,
-    debug_id:  usize
+    debug_id:  usize,
+    on_dirty_list: bool,
 }
 
 impl<'a, 'b> UdpSocket<'a, 'b> {
@@ -65,7 +66,8 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
             endpoint:  IpEndpoint::default(),
             rx_buffer: rx_buffer,
             tx_buffer: tx_buffer,
-            debug_id:  0
+            debug_id:  0,
+            on_dirty_list: false,
         })
     }
 
@@ -196,6 +198,18 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
             payload_len: repr.buffer_len()
         };
         emit(&ip_repr, &repr)
+    }
+
+    pub(crate) fn is_on_dirty_list(&self) -> bool {
+        self.on_dirty_list
+    }
+
+    pub(crate) fn set_on_dirty_list(&mut self, val: bool) {
+        self.on_dirty_list = val
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        !self.tx_buffer.empty()
     }
 }
 

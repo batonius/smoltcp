@@ -52,7 +52,7 @@ fn main() {
         Box::new(device), Box::new(arp_cache) as Box<ArpCache>,
         hardware_addr, protocol_addrs);
 
-    let mut sockets = SocketContainer::new(vec![]);
+    let mut sockets = SocketContainer::new(vec![], vec![]);
     let udp_handle  = sockets.add(udp_socket).unwrap();
     let tcp1_handle = sockets.add(tcp1_socket).unwrap();
     let tcp2_handle = sockets.add(tcp2_socket).unwrap();

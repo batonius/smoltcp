@@ -45,7 +45,8 @@ impl DispatchTable {
         }
     }
 
-    pub(crate) fn add_socket(&mut self, socket: &Socket, handle: SocketHandle) -> Result<(), Error> {
+    pub(crate) fn add_socket(&mut self, socket: &Socket, handle: SocketHandle)
+                             -> Result<(), Error> {
         match *socket {
             Socket::Udp(ref udp_socket) => self.add_udp_socket(udp_socket, handle),
             Socket::Tcp(ref tcp_socket) => self.add_tcp_socket(tcp_socket, handle),

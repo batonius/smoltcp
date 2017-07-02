@@ -1,11 +1,11 @@
 use Error;
-use core::ops::{Deref, DerefMut};
 use managed::ManagedSlice;
-use socket::{TcpSocket, UdpSocket, RawSocket, Socket, AsSocket, TcpState};
-use super::dispatch::DispatchTable;
-use super::set::{Set as SocketSet, Item as SocketSetItem,
-                 Handle as SocketHandle, IterMut as SetIterMut};
-use wire::{IpVersion, IpProtocol, IpRepr, UdpRepr, TcpRepr, IpEndpoint};
+use socket::dispatch::DispatchTable;
+use socket::set::{Set as SocketSet, Item as SocketSetItem, Handle as SocketHandle};
+use socket::{TcpSocket, UdpSocket, RawSocket, Socket, AsSocket};
+use storage::{RingBuffer};
+use wire::{IpVersion, IpProtocol, IpRepr, UdpRepr, TcpRepr};
+pub use super::tracker::{SocketTracker, TrackedSocket};
 
 /// A container of sockets with packet dispathing.
 ///
@@ -14,16 +14,20 @@ use wire::{IpVersion, IpProtocol, IpRepr, UdpRepr, TcpRepr, IpEndpoint};
 pub struct Container<'a, 'b: 'a, 'c: 'a + 'b> {
     set: SocketSet<'a, 'b, 'c>,
     dispatch_table: DispatchTable,
+    dirty_sockets: RingBuffer<'a, SocketHandle>,
 }
 
 impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     /// Create a new socket container using the provided storage
-    pub fn new<SocketsT>(sockets: SocketsT) -> Container<'a, 'b, 'c>
+    pub fn new<SocketsT, DirtySocketsT>(sockets: SocketsT,
+                                        dirty_sockets: DirtySocketsT) -> Container<'a, 'b, 'c>
         where SocketsT: Into<ManagedSlice<'a, Option<SocketSetItem<'b, 'c>>>>,
+              DirtySocketsT: Into<ManagedSlice<'a, SocketHandle>>,
     {
         Container {
             set: SocketSet::new(sockets),
             dispatch_table: DispatchTable::new(),
+            dirty_sockets: RingBuffer::new_default(dirty_sockets),
         }
     }
 
@@ -33,6 +37,9 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     /// This function panics if the storage is fixed-size (not a `Vec`) and is full.
     pub fn add(&mut self, socket: Socket<'b, 'c>) -> Result<SocketHandle, Error> {
         let handle = self.set.add(socket);
+        while self.set.capacity() > self.dirty_sockets.capacity() {
+            self.dirty_sockets.expand_storage();
+        }
         self.dispatch_table
             .add_socket(self.set.get(handle), handle)?;
         Ok(handle)
@@ -42,11 +49,14 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     ///
     /// # Panics
     /// This function may panic if the handle does not belong to this socket set.
-    pub fn get_mut<'d, T>(&'d mut self, handle: SocketHandle) -> Option<SocketTracker<'d, T>>
+    pub fn get_mut<'d, T>(&'d mut self, handle: SocketHandle) -> Option<SocketTracker<'d, 'a, T>>
         where T: TrackedSocket + 'd, Socket<'b, 'c>: AsSocket<T>
     {
         if let Some(socket) = self.set.get_mut(handle).try_as_socket() {
-            Some(SocketTracker::new(&mut self.dispatch_table, handle, socket))
+            Some(SocketTracker::new(&mut self.dispatch_table,
+                                    &mut self.dirty_sockets,
+                                    handle,
+                                    socket))
         } else {
             None
         }
@@ -57,49 +67,49 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
     /// # Panics
     /// This function may panic if the handle does not belong to this socket set.
     pub fn remove(&mut self, handle: SocketHandle) -> Socket<'b, 'c> {
-        let socket = self.set.remove(handle);
+        let mut socket = self.set.remove(handle);
         let res = self.dispatch_table.remove_socket(&socket, handle);
         debug_assert!(res.is_ok());
+        if socket.is_on_dirty_list() {
+            let res = self.dirty_sockets.remove(&handle);
+            socket.set_on_dirty_list(false);
+            debug_assert!(res.is_ok());
+        }
         socket
     }
 
     pub(crate) fn get_raw_socket<'d>(&'d mut self, ip_version: IpVersion, ip_protocol: IpProtocol)
-                                     -> Option<SocketTracker<'d, RawSocket<'b, 'c>>> {
+                                     -> Option<SocketTracker<'d, 'a, RawSocket<'b, 'c>>> {
         if let Some((raw_socket, handle)) =
             self.dispatch_table.get_raw_socket(&mut self.set, ip_version, ip_protocol)
         {
-            Some(SocketTracker::new(
-                &mut self.dispatch_table,
-                handle,
-                raw_socket,
-            ))
+            Some(SocketTracker::new(&mut self.dispatch_table, &mut self.dirty_sockets,
+                                    handle, raw_socket))
         } else {
             None
         }
     }
 
     pub(crate) fn get_udp_socket<'d>(&'d mut self, ip_repr: &IpRepr, udp_repr: &UdpRepr)
-                                     -> Option<SocketTracker<'d, UdpSocket<'b, 'c>>> {
+                                     -> Option<SocketTracker<'d, 'a, UdpSocket<'b, 'c>>> {
         if let Some((udp_socket, handle)) =
             self.dispatch_table.get_udp_socket(&mut self.set, ip_repr, udp_repr)
         {
-            Some(SocketTracker::new(
-                &mut self.dispatch_table,
-                handle,
-                udp_socket,
-            ))
+            Some(SocketTracker::new(&mut self.dispatch_table, &mut self.dirty_sockets,
+                                    handle, udp_socket))
         } else {
             None
         }
     }
 
     pub(crate) fn get_tcp_socket<'d>(&'d mut self, ip_repr: &IpRepr, tcp_repr: &TcpRepr)
-                                     -> Option<SocketTracker<'d, TcpSocket<'b>>> {
+                                     -> Option<SocketTracker<'d, 'a, TcpSocket<'b>>> {
         if let Some((tcp_socket, handle)) =
             self.dispatch_table.get_tcp_socket(&mut self.set, ip_repr, tcp_repr)
         {
             Some(SocketTracker::new(
                 &mut self.dispatch_table,
+                &mut self.dirty_sockets,
                 handle,
                 tcp_socket,
             ))
@@ -108,125 +118,56 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Container<'a, 'b, 'c> {
         }
     }
 
-    pub(crate) fn iter_mut<'d>(&'d mut self) -> SetIterMut<'d, 'b, 'c> {
-        self.set.iter_mut()
-    }
-}
-
-/// A trait for socket-type-depending tracking logic.
-///
-/// Used for upkeel of dispatching tables.
-pub trait TrackedSocket {
-    type State;
-
-    fn new_state(&Self) -> Self::State;
-    fn on_drop(&Self::State, &mut DispatchTable, &mut Self, SocketHandle) {}
-}
-
-impl<'a, 'b: 'a> TrackedSocket for RawSocket<'a, 'b> {
-    type State = ();
-
-    fn new_state(_: &Self) -> Self::State {
-        ()
-    }
-}
-
-impl<'a, 'b: 'a> TrackedSocket for UdpSocket<'a, 'b> {
-    type State = IpEndpoint;
-
-    fn new_state(udp_socket: &Self) -> Self::State {
-        udp_socket.endpoint()
-    }
-
-    fn on_drop(&old_endpoint: &Self::State, dispatch_table: &mut DispatchTable,
-               socket: &mut Self, handle: SocketHandle) {
-        if old_endpoint != socket.endpoint() {
-            if !old_endpoint.is_unbound() {
-                let res = dispatch_table.remove_udp_socket(handle);
-                debug_assert!(res.is_ok());
+    fn next_dirty<'d>(&'d mut self) -> Option<SocketTracker<'d, 'a, Socket<'b, 'c>>> {
+        let handle = {
+            match self.dirty_sockets.dequeue() {
+                Err(_) => return None,
+                Ok(handle) => *handle,
             }
-            let res = dispatch_table.add_udp_socket(socket, handle);
-            debug_assert!(res.is_ok());
+        };
+        let socket = self.set.get_mut(handle);
+        socket.set_on_dirty_list(false);
+        Some(SocketTracker::new(&mut self.dispatch_table, &mut self.dirty_sockets, handle, socket))
+    }
+
+    pub(crate) fn dirty_iter<'d>(&'d mut self) -> DirtyIter<'d, 'a, 'b, 'c> {
+        let capacity = self.dirty_sockets.capacity();
+        DirtyIter::new(self, capacity)
+    }
+}
+
+// An iterator over dirty sockets with limited iteration count.
+// A socket is removed from the `dirty_sockets` list in `next_dirty`, but can be
+// added back in the `SocketTracker` destructor if it still has data to send.
+// To prevent infinite iteration we limit ourselves to `dirty_sockets.capacity`
+// by using `DirtyIter`.
+//
+// `DirtyIter` can't implement the `Iterator` trait because of non-standard lifetimes
+pub struct DirtyIter<'a, 'b: 'a, 'c: 'b, 'd: 'b + 'c> {
+    container: &'a mut Container<'b, 'c, 'd>,
+    sockets_left: usize,
+}
+
+impl <'a, 'b: 'a, 'c: 'b, 'd: 'b + 'c> DirtyIter<'a, 'b, 'c, 'd> {
+    pub fn new(container: &'a mut Container<'b, 'c, 'd>, sockets_left: usize)
+               -> DirtyIter<'a, 'b, 'c, 'd> {
+        DirtyIter {
+            container,
+            sockets_left,
         }
     }
-}
 
-impl<'a> TrackedSocket for TcpSocket<'a> {
-    type State = TcpState;
-
-    fn new_state(tcp_socket: &Self) -> Self::State {
-        tcp_socket.state()
-    }
-
-    fn on_drop(&old_state: &Self::State, dispatch_table: &mut DispatchTable,
-               socket: &mut Self, handle: SocketHandle) {
-        if old_state == socket.state() {
-            return;
-        }
-
-        match (old_state, socket.state()) {
-            (_, TcpState::Closed) => {
-                let res = dispatch_table.remove_tcp_socket(handle);
-                debug_assert!(res.is_ok());
+    pub fn next<'e>(&'e mut self) -> Option<SocketTracker<'e, 'b, Socket<'c, 'd>>> {
+        if self.sockets_left == 0 {
+            None
+        } else {
+            self.sockets_left -= 1;
+            if let Some(tracker) = self.container.next_dirty() {
+                Some(tracker)
+            } else {
+                None
             }
-            (TcpState::Closed, _) => {
-                let res = dispatch_table.add_tcp_socket(socket, handle);
-                debug_assert!(res.is_ok());
-            }
-            (TcpState::TimeWait, _) |
-            (TcpState::Listen, _) => {
-                let res = dispatch_table.remove_tcp_socket(handle);
-                debug_assert!(res.is_ok());
-                let res = dispatch_table.add_tcp_socket(socket, handle);
-                debug_assert!(res.is_ok());
-            }
-            (_, _) => {}
         }
-    }
-}
-
-/// A tracking smart-pointer to a socket.
-///
-/// Implements `Deref` and `DerefMut` to the socket it contains.
-/// Keeps the dispatching tables up to date by updating them in `drop`.
-#[derive(Debug)]
-pub struct SocketTracker<'a, T: TrackedSocket + 'a> {
-    handle: SocketHandle,
-    socket: &'a mut T,
-    dispatch_table: &'a mut DispatchTable,
-    state: T::State,
-}
-
-impl<'a, T: TrackedSocket + 'a> SocketTracker<'a, T> {
-    fn new(dispatch_table: &'a mut DispatchTable, handle: SocketHandle, socket: &'a mut T) -> Self {
-        let state = TrackedSocket::new_state(socket);
-        SocketTracker {
-            handle,
-            dispatch_table,
-            socket,
-            state,
-        }
-
-    }
-}
-
-impl<'a, T: TrackedSocket + 'a> Drop for SocketTracker<'a, T> {
-    fn drop(&mut self) {
-        TrackedSocket::on_drop(&self.state, self.dispatch_table, self.socket, self.handle);
-    }
-}
-
-impl<'a, T: TrackedSocket + 'a> Deref for SocketTracker<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.socket
-    }
-}
-
-impl<'a, T: TrackedSocket + 'a> DerefMut for SocketTracker<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.socket
     }
 }
 
@@ -243,7 +184,7 @@ mod test {
                    IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::new(192, 168, 1, 4)), 12345u16),
                    IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::new(192, 168, 1, 5)), 12345u16)];
 
-        let mut sockets = SocketContainer::new(vec![]);
+        let mut sockets = SocketContainer::new(vec![], vec![]);
 
         let udp_rx_buffer = UdpSocketBuffer::new(vec![UdpPacketBuffer::new(vec![0; 64])]);
         let udp_tx_buffer = UdpSocketBuffer::new(vec![UdpPacketBuffer::new(vec![0; 128])]);
