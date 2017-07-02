@@ -1,9 +1,19 @@
 use Error;
 use socket::set::{Set as SocketSet};
 use socket::{SocketHandle, TcpSocket, UdpSocket, RawSocket, Socket, AsSocket};
-use std::collections::btree_map::Entry as MapEntry;
-use std::collections::{BTreeMap, BTreeSet};
 use wire::{IpVersion, IpProtocol, IpEndpoint, IpAddress, IpRepr, UdpRepr, TcpRepr};
+#[cfg(feature = "std")]
+use std::collections::btree_map::Entry as MapEntry;
+#[cfg(feature = "std")]
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "std")]
+use std::collections::Bound::Included;
+#[cfg(feature = "collections")]
+use collections::btree_map::Entry as MapEntry;
+#[cfg(feature = "collections")]
+use collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "collections")]
+use collections::Bound::Included;
 
 #[derive(Debug)]
 struct TcpLocalEndpoint {
@@ -235,7 +245,6 @@ impl DispatchTable {
     }
 
     fn get_socket_data<T>(tree: &BTreeMap<IpEndpoint, T>, endpoint: IpEndpoint) -> Option<&T> {
-        use std::collections::Bound::Included;
         let mut unspecified_endpoint = endpoint;
         unspecified_endpoint.addr = IpAddress::Unspecified;
         let mut range = tree.range((Included(unspecified_endpoint), Included(endpoint)));
