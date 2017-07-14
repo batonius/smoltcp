@@ -20,7 +20,7 @@ use smoltcp::Error;
 use smoltcp::phy::Loopback;
 use smoltcp::wire::{EthernetAddress, IpAddress};
 use smoltcp::iface::{ArpCache, SliceArpCache, EthernetInterface};
-use smoltcp::socket::{AsSocket, SocketSet};
+use smoltcp::socket::{SocketContainer};
 use smoltcp::socket::{TcpSocket, TcpSocketBuffer};
 
 #[cfg(not(feature = "std"))]
@@ -116,17 +116,18 @@ fn main() {
         TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer)
     };
 
-    let mut socket_set_entries: [_; 2] = Default::default();
-    let mut socket_set = SocketSet::new(&mut socket_set_entries[..]);
-    let server_handle = socket_set.add(server_socket);
-    let client_handle = socket_set.add(client_socket);
+    let mut sockets_entries: [_; 2] = Default::default();
+    let mut dirty_set_entries: [_; 2] = Default::default();
+    let mut sockets = SocketContainer::new(&mut sockets_entries[..], &mut dirty_set_entries[..]);
+    let server_handle = sockets.add(server_socket).unwrap();
+    let client_handle = sockets.add(client_socket).unwrap();
 
     let mut did_listen  = false;
     let mut did_connect = false;
     let mut done = false;
     while !done && clock.elapsed() < 10_000 {
         {
-            let socket: &mut TcpSocket = socket_set.get_mut(server_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(server_handle).unwrap();
             if !socket.is_active() && !socket.is_listening() {
                 if !did_listen {
                     debug!("listening");
@@ -143,7 +144,7 @@ fn main() {
         }
 
         {
-            let socket: &mut TcpSocket = socket_set.get_mut(client_handle).as_socket();
+            let mut socket = sockets.get_mut::<TcpSocket>(client_handle).unwrap();
             if !socket.is_open() {
                 if !did_connect {
                     debug!("connecting");
@@ -160,7 +161,7 @@ fn main() {
             }
         }
 
-        match iface.poll(&mut socket_set, clock.elapsed()) {
+        match iface.poll(&mut sockets, clock.elapsed()) {
             Ok(()) | Err(Error::Exhausted) => (),
             Err(e) => debug!("poll error: {}", e)
         }
