@@ -1,7 +1,7 @@
 #![cfg_attr(feature = "alloc", feature(alloc))]
 #![no_std]
 #![deny(unsafe_code)]
-#![cfg_attr(any(feature = "proto-ipv4", feature = "proto-ipv6"), deny(unused))]
+// #![cfg_attr(any(feature = "proto-ipv4", feature = "proto-ipv6"), deny(unused))]
 
 //! The _smoltcp_ library is built in a layered structure, with the layers corresponding
 //! to the levels of API abstraction. Only the highest layers would be used by a typical
@@ -119,6 +119,7 @@ pub mod wire;
 pub mod iface;
 pub mod socket;
 pub mod time;
+pub mod layers;
 
 /// The error type for the networking stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
